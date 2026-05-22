@@ -29,9 +29,3 @@ module FfmpegProgress
     1
   end
 end
-
-# Run main only when invoked as the `ffmpeg-progress` binary. Library uses
-# and spec runs that `require` this file will skip the call.
-if File.basename(PROGRAM_NAME) == "ffmpeg-progress"
-  exit FfmpegProgress.main(ARGV)
-end

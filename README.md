@@ -158,7 +158,8 @@ argument-parsing errors (e.g. nothing after `--`).
 
 ```text
 src/
-  ffmpeg-progress.cr             # entrypoint + module
+  cli.cr                         # binary entrypoint (shard.yml target)
+  ffmpeg-progress.cr             # module + FfmpegProgress.main
   ffmpeg-progress/
     ansi.cr                      # escapes, blocks, terminal width
     style_options.cr             # wrapper option parsing
