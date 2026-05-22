@@ -1,0 +1,13 @@
+name: ffmpeg-progress
+version: 0.1.0
+
+authors:
+  - Paul M. Lambert <plambert@plambert.net>
+
+targets:
+  ffmpeg-progress:
+    main: src/ffmpeg-progress.cr
+
+crystal: '>= 1.20.2'
+
+license: MIT
