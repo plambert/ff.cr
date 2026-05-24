@@ -13,6 +13,28 @@ module FfmpegProgress
     FULL_BLOCK     = "█"
     PARTIAL_BLOCKS = ["▏", "▎", "▍", "▌", "▋", "▊", "▉"]
 
+    # ASCII fallback for terminals whose locale isn't UTF-8 — the empty/full
+    # cells are still distinguishable without any non-ASCII bytes.
+    ASCII_FULL_BLOCK     = "#"
+    ASCII_PARTIAL_BLOCKS = ["1", "2", "3", "4", "5", "6", "7"]
+    ASCII_EMPTY          = "."
+
+    # Best-effort detection of whether the controlling locale will render
+    # Unicode block characters. Returns true if LC_ALL / LC_CTYPE / LANG
+    # advertises UTF-8 (case-insensitive). A wholly unset locale defaults to
+    # true since modern interactive terminals are UTF-8.
+    def self.utf8_locale? : Bool
+      saw_any = false
+      {"LC_ALL", "LC_CTYPE", "LANG"}.each do |name|
+        val = ENV[name]?
+        next if val.nil? || val.empty?
+        saw_any = true
+        v = val.downcase
+        return true if v.includes?("utf-8") || v.includes?("utf8")
+      end
+      !saw_any
+    end
+
     def self.terminal_width(default : Int32 = 80) : Int32
       if cols = ENV["COLUMNS"]?.try(&.to_i?)
         return cols if cols > 0

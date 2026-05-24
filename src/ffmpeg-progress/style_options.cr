@@ -12,6 +12,7 @@ module FfmpegProgress
     property log_file : String? = nil
     property no_progress : Bool = false
     property no_color : Bool = false
+    property ascii : Bool? = nil # nil = auto-detect from locale
     property show_help : Bool = false
     property show_version : Bool = false
     property debug : Bool = false
@@ -71,6 +72,14 @@ module FfmpegProgress
           opts.no_color = true
         end
 
+        op.on("--ascii", "Use ASCII characters for the bar (auto-detected from locale if unset)") do
+          opts.ascii = true
+        end
+
+        op.on("--utf8", "Force Unicode block characters for the bar") do
+          opts.ascii = false
+        end
+
         op.on("--debug", "Emit wrapper diagnostics on stderr") do
           opts.debug = true
         end
@@ -98,6 +107,7 @@ module FfmpegProgress
     private STYLE_OPTIONS_WITH_VALUE = {"--log-file"}
     private STYLE_OPTIONS_BOOLEAN    = {
       "--show-stderr", "--no-progress", "--no-color",
+      "--ascii", "--utf8",
       "--debug", "-h", "--help", "--version",
     }
 

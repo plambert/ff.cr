@@ -5,8 +5,8 @@ require "./style_options"
 
 module FfmpegProgress
   class Runner
-    WARMUP   = 2.seconds
-    TICK     = 250.milliseconds
+    WARMUP    = 2.seconds
+    TICK      = 250.milliseconds
     MIN_WIDTH = 40
 
     def initialize(@analysis : Analysis, @options : StyleOptions, @args : Array(String))
@@ -15,6 +15,8 @@ module FfmpegProgress
       @bar.total_frames = @analysis.total_frames
       @bar.frames_based = @analysis.use_frames?
       @bar.no_color = @options.no_color
+      ascii_choice = @options.ascii
+      @bar.ascii = ascii_choice.nil? ? !Ansi.utf8_locale? : ascii_choice
       @bar_mutex = Mutex.new
       @tty_mutex = Mutex.new
       @stderr_buffer = IO::Memory.new
@@ -23,6 +25,7 @@ module FfmpegProgress
 
     @log_io : File? = nil
     @console_chan : Channel(String)? = nil
+    @signal_count : Atomic(Int32) = Atomic(Int32).new(0)
 
     def run : Int32
       analysis_notes_to_stderr
@@ -48,8 +51,9 @@ module FfmpegProgress
 
       # Pre-open the log file if needed.
       if effective_stderr_mode == StyleOptions::StderrMode::LogFile
-        path = @options.log_file.not_nil!
-        @log_io = File.open(path, "w")
+        if path = @options.log_file
+          @log_io = File.open(path, "w")
+        end
       end
 
       # Build the argv we'll hand to ffmpeg.
@@ -57,6 +61,7 @@ module FfmpegProgress
 
       if @options.debug
         STDERR.puts "ffmpeg-progress: mode=#{@analysis.mode} duration=#{@analysis.total_duration} frames=#{@analysis.total_frames}"
+        STDERR.puts "ffmpeg-progress: bar ascii=#{@bar.ascii} no_color=#{@bar.no_color} utf8_locale=#{Ansi.utf8_locale?}"
         STDERR.puts "ffmpeg-progress: argv=#{argv.inspect}"
       end
 
@@ -123,7 +128,22 @@ module FfmpegProgress
       status = status_chan.receive
 
       cleanup(show_bar, status, effective_stderr_mode)
-      status.exit_code
+      exit_code_from(status)
+    end
+
+    # Always return a non-zero status when ffmpeg didn't exit cleanly with 0,
+    # so `set -e` in the caller's shell loop catches it. For signal exits we
+    # follow the POSIX convention of `128 + signal`.
+    private def exit_code_from(status : Process::Status) : Int32
+      if status.normal_exit?
+        status.exit_code
+      elsif sig = status.exit_signal?
+        128 + sig.value
+      else
+        1
+      end
+    rescue
+      status.success? ? 0 : 1
     end
 
     private def build_ffmpeg_argv(show_bar : Bool) : Array(String)
@@ -143,22 +163,47 @@ module FfmpegProgress
     end
 
     private def install_signal_traps(process : Process)
-      Signal::INT.trap do
-        forward_signal(process, Signal::INT)
-      end
-      Signal::TERM.trap do
-        forward_signal(process, Signal::TERM)
-      end
-      Signal::WINCH.trap do
-        # No-op; we re-read terminal width on every draw.
+      Signal::INT.trap { handle_termination_signal(process) }
+      Signal::TERM.trap { handle_termination_signal(process) }
+      Signal::HUP.trap { handle_termination_signal(process) }
+    end
+
+    # On the first interrupt we ask ffmpeg to clean up (SIGINT). If a second
+    # arrives before ffmpeg has exited, escalate to SIGTERM. On the third we
+    # SIGKILL ffmpeg, restore the terminal, and exit ffp immediately so the
+    # caller's shell loop (with `set -e`) can break out.
+    private def handle_termination_signal(process : Process)
+      count = @signal_count.add(1) + 1
+      case count
+      when 1
+        send_signal_safely(process, Signal::INT)
+        write_signal_note "interrupt requested; asking ffmpeg to exit (Ctrl-C again to force)"
+      when 2
+        send_signal_safely(process, Signal::TERM)
+        write_signal_note "sending SIGTERM to ffmpeg (Ctrl-C again to force quit)"
+      else
+        send_signal_safely(process, Signal::KILL)
+        restore_terminal
+        Process.exit(130) # 128 + SIGINT(2)
       end
     end
 
-    private def forward_signal(process : Process, sig : Signal)
-      begin
-        process.signal(sig)
-      rescue
-      end
+    private def send_signal_safely(process : Process, sig : Signal)
+      process.signal(sig)
+    rescue
+      # Process is already gone — nothing to do.
+    end
+
+    private def write_signal_note(msg : String)
+      # Signal handlers shouldn't grab @tty_mutex (re-entrancy risk). Best
+      # effort: just write directly to stderr.
+      STDERR.print "\nffmpeg-progress: #{msg}\n" rescue nil
+      STDERR.flush rescue nil
+    end
+
+    private def restore_terminal
+      STDOUT.print "\n#{Ansi::SHOW_CURSOR}" rescue nil
+      STDOUT.flush rescue nil
     end
 
     private def read_progress(io : IO)
@@ -172,30 +217,37 @@ module FfmpegProgress
           when "out_time_us", "out_time_ms"
             # out_time_us and out_time_ms are both in microseconds despite the
             # name (an ffmpeg quirk). out_time_us is preferred.
-            if v = value.to_i64?
-              @bar.update_out_time(v / 1_000_000.0)
+            if microseconds = value.to_i64?
+              @bar.update_out_time(microseconds / 1_000_000.0)
             end
           when "out_time"
-            if t = parse_hhmmss(value)
-              @bar.update_out_time(t)
+            if seconds = parse_hhmmss(value)
+              @bar.update_out_time(seconds)
             end
           when "frame"
-            if v = value.to_i64?
-              @bar.update_frame(v)
+            if frame_number = value.to_i64?
+              @bar.update_frame(frame_number)
+            end
+          when "speed"
+            # ffmpeg formats this as "2.2x" or "N/A" (rarely a bare number).
+            stripped = value.strip
+            stripped = stripped[0..-2] if stripped.ends_with?("x")
+            if multiplier = stripped.to_f?
+              @bar.update_speed(multiplier)
             end
           end
         end
       end
     end
 
-    private def parse_hhmmss(s : String) : Float64?
-      parts = s.split(":")
+    private def parse_hhmmss(timecode : String) : Float64?
+      parts = timecode.split(":")
       return nil if parts.size != 3
-      h = parts[0].to_f?
-      m = parts[1].to_f?
-      sec = parts[2].to_f?
-      return nil unless h && m && sec
-      h * 3600.0 + m * 60.0 + sec
+      hours = parts[0].to_f?
+      minutes = parts[1].to_f?
+      seconds = parts[2].to_f?
+      return nil unless hours && minutes && seconds
+      hours * 3600.0 + minutes * 60.0 + seconds
     end
 
     private def read_stderr(io : IO, mode : StyleOptions::StderrMode)

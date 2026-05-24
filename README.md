@@ -6,8 +6,14 @@ Unicode partial blocks — and that keeps `ffmpeg`'s own stderr out of the way
 unless something goes wrong.
 
 ```text
- 12.3%    10:31 -> ETA 15:11 ███████████████▎
+ 12.3%    10:31 -> ETA 15:11 @ 2.20x ███████████████▎
 ```
+
+The `@ N.NNx` field is `ffmpeg`'s reported encoding speed (seconds of
+output produced per second of wall time), smoothed by an exponential
+moving average so it doesn't twitch frame-to-frame. It uses a fixed
+5-character slot (`0.04x` … ` 100x` … `1234x`) so the bar doesn't shift
+when the value first arrives or rolls between magnitudes.
 
 The bar is green on a gray background (so partial blocks meet the empty
 portion flush, with no gap). It shows percent complete, elapsed time, and
@@ -90,7 +96,9 @@ of the argv is passed straight through to `ffmpeg`.)
 | `--show-stderr` | Forward `ffmpeg`'s stderr to the wrapper's stderr live, with the progress bar cleared/redrawn around each line so the display stays tidy. |
 | `--no-progress` | Disable the progress bar; behave as a near-passthrough (but still apply `-nostdin -hide_banner`). |
 | `--no-color` | Render the bar without ANSI color (uses `.` for empty cells). |
-| `--debug` | Print a one-line summary of the detected mode, total duration/frames, and the actual argv passed to `ffmpeg`. |
+| `--ascii` | Render the bar with plain ASCII (`#` filled, `1`–`7` for partials, `.` empty). Auto-selected when the locale isn't UTF-8. |
+| `--utf8` | Force Unicode block characters even if the locale doesn't advertise UTF-8. |
+| `--debug` | Print a one-line summary of the detected mode, total duration/frames, locale/bar choices, and the actual argv passed to `ffmpeg`. |
 | `-h`, `--help` | Print help and exit. |
 | `--version` | Print version and exit. |
 
@@ -106,6 +114,16 @@ exit, the buffer is flushed to **stdout** so the error reaches the user
 When the wrapper falls back to "unknown" mode (no bar), and you haven't
 explicitly chosen `--log-file`, it switches to live-stderr automatically —
 otherwise you'd see no progress at all.
+
+### Locale and character set
+
+By default the bar uses Unicode block characters (`█`, `▏`–`▉`) for
+sub-cell resolution and writes a green-on-gray ANSI region so partial
+cells meet the empty portion with no gap. If the controlling locale isn't
+UTF-8 (`LC_ALL` / `LC_CTYPE` / `LANG` doesn't advertise it), the wrapper
+falls back to an ASCII bar (`#` fill, `1`–`7` partials, `.` empty) so the
+terminal doesn't render the block bytes as `?`. Use `--ascii` or `--utf8`
+to force the choice; `--debug` reports which was selected.
 
 ### Examples
 
@@ -149,10 +167,25 @@ Pass-through mode (no bar, no buffering, just the always-applied flags):
 ffmpeg-progress --no-progress --show-stderr -- -i in.mp4 -f null -
 ```
 
-### Exit status
+### Exit status and interrupts
 
 The wrapper exits with `ffmpeg`'s exit status. `2` is used for its own
-argument-parsing errors (e.g. nothing after `--`).
+argument-parsing errors (e.g. nothing after `--`). When `ffmpeg` is killed
+by a signal, the wrapper exits with `128 + signal_number` (POSIX
+convention) — so `set -e` in a shell loop will always see a non-zero
+status and bail out, even if `ffmpeg`'s own shutdown wasn't graceful.
+
+Pressing **Ctrl-C** sends `SIGINT` to the whole foreground process group;
+the wrapper escalates as you press it again:
+
+1. **First Ctrl-C** — forward `SIGINT` to `ffmpeg` (graceful clean-up).
+2. **Second Ctrl-C** — forward `SIGTERM`.
+3. **Third Ctrl-C** — `SIGKILL` `ffmpeg`, restore the terminal, and exit
+   the wrapper immediately with `130`.
+
+Hardware encoders (e.g. `hevc_videotoolbox`) sometimes take a moment to
+honor `SIGINT`; the escalation lets you push harder without giving up
+on a clean teardown the first time.
 
 ## Project layout
 

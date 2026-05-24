@@ -21,11 +21,11 @@ module FfmpegProgress
       out_io = IO::Memory.new
       status = Process.run(
         "ffprobe", [
-          "-v", "error",
-          "-show_entries", "format=duration",
-          "-of", "default=noprint_wrappers=1:nokey=1",
-          path,
-        ],
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path,
+      ],
         output: out_io,
         error: Process::Redirect::Close,
         input: Process::Redirect::Close
@@ -42,12 +42,12 @@ module FfmpegProgress
       out_io = IO::Memory.new
       status = Process.run(
         "ffprobe", [
-          "-v", "error",
-          "-select_streams", "v:0",
-          "-show_entries", "stream=avg_frame_rate",
-          "-of", "default=noprint_wrappers=1:nokey=1",
-          path,
-        ],
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=avg_frame_rate",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        path,
+      ],
         output: out_io,
         error: Process::Redirect::Close,
         input: Process::Redirect::Close

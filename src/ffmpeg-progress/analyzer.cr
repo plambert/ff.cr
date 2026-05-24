@@ -7,7 +7,7 @@ module FfmpegProgress
     property t : Float64? = nil
     property to : Float64? = nil
     property framerate : Float64? = nil
-    property format : String? = nil  # -f value if set before -i
+    property format : String? = nil # -f value if set before -i
     property is_image_sequence : Bool = false
     property is_concat_demux : Bool = false
 
@@ -99,10 +99,10 @@ module FfmpegProgress
       stash_ss = nil
       stash_t = nil
       stash_to = nil
-      stash_r = nil          # -r (rate, input or output)
-      stash_framerate = nil  # -framerate (input only)
+      stash_r = nil         # -r (rate, input or output)
+      stash_framerate = nil # -framerate (input only)
       stash_vframes = nil
-      stash_format = nil     # -f
+      stash_format = nil # -f
       has_filter_concat = false
 
       while i < @args.size
