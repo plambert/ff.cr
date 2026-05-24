@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# bench-overhead — measure how much overhead the ffmpeg-progress wrapper
+# adds versus running ffmpeg directly.
+#
+# Runs a single sample of each command via hyperfine (no warmup, --runs 1)
+# so the measurement matches one "real" invocation of each. Encoding is
+# CPU-bound, so the first-run cache state has minimal effect; for a more
+# stable comparison, raise HYPERFINE_RUNS in the env.
+#
+# Usage:
+#   script/bench-overhead [INPUT_FILE]
+#
+# Env knobs:
+#   DURATION         seconds of synthetic input when generating (default: 30)
+#   PRESET           libx264 preset for the encode               (default: medium)
+#   CRF              libx264 CRF                                  (default: 23)
+#   HYPERFINE_RUNS   override the --runs count                    (default: 1)
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+WRAPPER="$REPO_ROOT/bin/ffmpeg-progress"
+INPUT="${1:-/tmp/ffp-bench-input.mp4}"
+DURATION="${DURATION:-30}"
+PRESET="${PRESET:-medium}"
+CRF="${CRF:-23}"
+RUNS="${HYPERFINE_RUNS:-1}"
+
+command -v hyperfine >/dev/null || { echo "bench-overhead: hyperfine not installed" >&2; exit 1; }
+command -v ffmpeg    >/dev/null || { echo "bench-overhead: ffmpeg not installed"    >&2; exit 1; }
+
+if [[ ! -x "$WRAPPER" ]]; then
+  echo "bench-overhead: building $WRAPPER..." >&2
+  (cd "$REPO_ROOT" && shards build --release)
+fi
+
+if [[ ! -s "$INPUT" ]]; then
+  echo "bench-overhead: generating ${DURATION}s synthetic input at $INPUT..." >&2
+  ffmpeg -hide_banner -loglevel error -y \
+    -f lavfi -i "testsrc=duration=${DURATION}:size=1280x720:rate=30" \
+    -c:v libx264 -preset ultrafast "$INPUT"
+fi
+
+OUT_BARE="$(mktemp -t ffp-bench-bare).mp4"
+OUT_WRAP="$(mktemp -t ffp-bench-wrap).mp4"
+trap 'rm -f "$OUT_BARE" "$OUT_WRAP"' EXIT
+
+# Reject paths with whitespace — these strings are handed to a shell.
+for path in "$INPUT" "$WRAPPER" "$OUT_BARE" "$OUT_WRAP"; do
+  case "$path" in
+    *[[:space:]]*) echo "bench-overhead: path contains whitespace: $path" >&2; exit 2 ;;
+  esac
+done
+
+COMMON_ARGS="-y -i $INPUT -c:v libx264 -preset $PRESET -crf $CRF -c:a copy"
+
+echo "bench-overhead: input=$INPUT preset=$PRESET crf=$CRF runs=$RUNS" >&2
+
+# Both commands silence all output so terminal IO doesn't skew timing.
+# The wrapper's stdout would only have content if ffmpeg failed (it buffers
+# stderr and dumps on non-zero exit), so /dev/null is safe on a successful
+# encode.
+hyperfine \
+  --warmup 0 \
+  --runs "$RUNS" \
+  --command-name "bare ffmpeg" \
+  "ffmpeg $COMMON_ARGS $OUT_BARE >/dev/null 2>&1" \
+  --command-name "via ffmpeg-progress" \
+  "$WRAPPER -- $COMMON_ARGS $OUT_WRAP >/dev/null 2>&1"
