@@ -26,6 +26,8 @@ module FfmpegProgress
     @log_io : File? = nil
     @console_chan : Channel(String)? = nil
     @signal_count : Atomic(Int32) = Atomic(Int32).new(0)
+    @overlay_active : Bool = false
+    @overlay_text : String? = nil
 
     def run : Int32
       analysis_notes_to_stderr
@@ -37,6 +39,9 @@ module FfmpegProgress
       show_bar = !@options.no_progress &&
                  @analysis.mode != Analysis::Mode::Unknown &&
                  STDOUT.tty?
+
+      # Overlay only makes sense when we're actually drawing a bar.
+      @overlay_active = @options.overlay && show_bar
 
       # When the analyzer couldn't classify the command, fall back to letting
       # ffmpeg's own progress output reach the console — but only for the
@@ -61,7 +66,7 @@ module FfmpegProgress
 
       if @options.debug
         STDERR.puts "ffmpeg-progress: mode=#{@analysis.mode} duration=#{@analysis.total_duration} frames=#{@analysis.total_frames}"
-        STDERR.puts "ffmpeg-progress: bar ascii=#{@bar.ascii} no_color=#{@bar.no_color} utf8_locale=#{Ansi.utf8_locale?}"
+        STDERR.puts "ffmpeg-progress: bar ascii=#{@bar.ascii} no_color=#{@bar.no_color} utf8_locale=#{Ansi.utf8_locale?} overlay=#{@overlay_active}"
         STDERR.puts "ffmpeg-progress: argv=#{argv.inspect}"
       end
 
@@ -152,9 +157,10 @@ module FfmpegProgress
       argv << "-nostdin"
       argv << "-hide_banner"
       if show_bar
-        # Suppress the noisy `frame= fps= ...` lines from stderr; our bar
-        # replaces them. ffmpeg's -progress stream goes to pipe:1.
-        argv << "-nostats"
+        # When overlay mode is on, leave ffmpeg's stats line alone: the
+        # stderr reader picks it out and parks it above the bar. Otherwise
+        # silence it so our own bar isn't competing with `frame= fps= ...`.
+        argv << "-nostats" unless @overlay_active
         argv << "-progress"
         argv << "pipe:1"
       end
@@ -251,19 +257,69 @@ module FfmpegProgress
     end
 
     private def read_stderr(io : IO, mode : StyleOptions::StderrMode)
-      while line = io.gets
-        case mode
-        in .buffer?
-          @stderr_buffer << line << "\n"
-        in .log_file?
-          if log = @log_io
-            log.puts line
-            log.flush
-          end
-        in .console?
-          if chan = @console_chan
-            chan.send(line)
-          end
+      if @overlay_active
+        read_stderr_overlay(io, mode)
+      else
+        while line = io.gets
+          dispatch_stderr_line(line, mode)
+        end
+      end
+    end
+
+    # When overlay is on we can't use line-buffered `gets`: ffmpeg's
+    # in-progress stats line is terminated by `\r`, not `\n`, so it would
+    # never appear as a discrete record. Read char-by-char and split on
+    # either terminator, then peel off any `\r`-terminated `frame=…` /
+    # `size=…` chunks into the overlay slot. Everything else flows through
+    # the normal stderr-mode dispatch.
+    private def read_stderr_overlay(io : IO, mode : StyleOptions::StderrMode)
+      buffer = IO::Memory.new
+      loop do
+        char = io.read_char
+        if char.nil?
+          flush_stderr_chunk(buffer.to_s, '\n', mode) if buffer.size > 0
+          break
+        end
+        if char == '\r' || char == '\n'
+          flush_stderr_chunk(buffer.to_s, char, mode)
+          buffer.clear
+        else
+          buffer << char
+        end
+      end
+    end
+
+    private def flush_stderr_chunk(text : String, terminator : Char, mode : StyleOptions::StderrMode)
+      return if text.empty? # collapses \r\n, \n\r, repeated \n, etc.
+
+      if terminator == '\r' && progress_stats_line?(text)
+        cleaned = text.rstrip
+        @bar_mutex.synchronize { @overlay_text = cleaned }
+        return
+      end
+
+      dispatch_stderr_line(text, mode)
+    end
+
+    private def progress_stats_line?(text : String) : Bool
+      trimmed = text.lstrip
+      trimmed.starts_with?("frame=") ||
+        trimmed.starts_with?("size=") ||
+        trimmed.starts_with?("fps=")
+    end
+
+    private def dispatch_stderr_line(text : String, mode : StyleOptions::StderrMode)
+      case mode
+      in .buffer?
+        @stderr_buffer << text << "\n"
+      in .log_file?
+        if log = @log_io
+          log.puts text
+          log.flush
+        end
+      in .console?
+        if chan = @console_chan
+          chan.send(text)
         end
       end
     end
@@ -317,10 +373,9 @@ module FfmpegProgress
     private def draw_bar
       width = Ansi.terminal_width
       width = MIN_WIDTH if width < MIN_WIDTH
-      line = @bar_mutex.synchronize { @bar.render(width) }
+      bar_line, overlay = @bar_mutex.synchronize { {@bar.render(width), @overlay_text} }
       @tty_mutex.synchronize do
-        STDOUT.print "\r"
-        STDOUT.print line
+        write_display_block(bar_line, overlay, width)
         STDOUT.flush
         @bar_visible = true
       end
@@ -328,24 +383,59 @@ module FfmpegProgress
 
     private def handle_console_line(line : String, redraw : Bool)
       @tty_mutex.synchronize do
-        if @bar_visible
-          STDOUT.print Ansi::CLEAR_LINE
-          STDOUT.flush
-        end
+        clear_display_block if @bar_visible
         STDERR.puts line
         STDERR.flush
         if redraw
           width = Ansi.terminal_width
           width = MIN_WIDTH if width < MIN_WIDTH
-          bar_line = @bar_mutex.synchronize { @bar.render(width) }
-          STDOUT.print "\r"
-          STDOUT.print bar_line
+          bar_line, overlay = @bar_mutex.synchronize { {@bar.render(width), @overlay_text} }
+          write_display_block(bar_line, overlay, width)
           STDOUT.flush
           @bar_visible = true
         else
           @bar_visible = false
         end
       end
+    end
+
+    # Render the bar (and, with overlay, the ffmpeg stats line above it) in
+    # place. Expects @tty_mutex held. Assumes that when @bar_visible the
+    # cursor is parked at the end of the bar line, and leaves it there.
+    private def write_display_block(bar_line : String, overlay : String?, width : Int32)
+      if @overlay_active
+        if @bar_visible
+          # Move up to the overlay line, clear it.
+          STDOUT.print "\e[1A\r\e[2K"
+        else
+          # First draw: just clear whatever was on the current line.
+          STDOUT.print "\r\e[2K"
+        end
+        STDOUT.print truncate_to_width(overlay || "", width)
+        # Move down, clear, return to col 0, then draw the bar.
+        STDOUT.print "\n\e[2K\r"
+        STDOUT.print bar_line
+      else
+        STDOUT.print "\r\e[2K"
+        STDOUT.print bar_line
+      end
+    end
+
+    # Erase the display block (1 or 2 lines) and park the cursor at column
+    # 0 of the *top* line of where the block was. Expects @tty_mutex held.
+    private def clear_display_block
+      if @overlay_active
+        # Cursor is at end of bar; clear bar, move up, clear overlay.
+        STDOUT.print "\r\e[2K\e[1A\r\e[2K"
+      else
+        STDOUT.print Ansi::CLEAR_LINE
+      end
+      STDOUT.flush
+    end
+
+    private def truncate_to_width(text : String, width : Int32) : String
+      return text if text.size <= width
+      text[0, width]
     end
 
     private def hide_cursor
@@ -365,8 +455,11 @@ module FfmpegProgress
     private def cleanup(show_bar : Bool, status : Process::Status, mode : StyleOptions::StderrMode)
       @tty_mutex.synchronize do
         if @bar_visible
+          width = Ansi.terminal_width
+          width = MIN_WIDTH if width < MIN_WIDTH
+
           if status.success?
-            # Final draw at 100% then newline.
+            # Snap the bar's state to 100% so the final frame reads cleanly.
             @bar_mutex.synchronize do
               if td = @bar.total_duration
                 @bar.update_out_time(td)
@@ -375,14 +468,19 @@ module FfmpegProgress
                 @bar.update_frame(tf)
               end
             end
-            width = Ansi.terminal_width
-            width = MIN_WIDTH if width < MIN_WIDTH
-            STDOUT.print "\r"
-            STDOUT.print @bar_mutex.synchronize { @bar.render(width) }
+            bar_line, overlay = @bar_mutex.synchronize { {@bar.render(width), @overlay_text} }
+            write_display_block(bar_line, overlay, width)
+            # One \n to step past the bar line. With overlay, the cursor was
+            # on the bar line so a single \n still lands us below the block.
+            STDOUT.puts
           else
-            STDOUT.print Ansi::CLEAR_LINE
+            # Failure: erase the display block entirely. clear_display_block
+            # leaves us at the start of the top line of the block, so a
+            # single \n per cleared line gets us past it.
+            clear_display_block
+            STDOUT.puts
+            STDOUT.puts if @overlay_active
           end
-          STDOUT.puts
           STDOUT.flush
         end
         STDOUT.print Ansi::SHOW_CURSOR if show_bar

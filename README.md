@@ -98,6 +98,7 @@ of the argv is passed straight through to `ffmpeg`.)
 | `--no-color` | Render the bar without ANSI color (uses `.` for empty cells). |
 | `--ascii` | Render the bar with plain ASCII (`#` filled, `1`–`7` for partials, `.` empty). Auto-selected when the locale isn't UTF-8. |
 | `--utf8` | Force Unicode block characters even if the locale doesn't advertise UTF-8. |
+| `--overlay` | Show `ffmpeg`'s own `frame=… fps=… time=… speed=…` stats line on the line *above* the bar, updated in place. |
 | `--debug` | Print a one-line summary of the detected mode, total duration/frames, locale/bar choices, and the actual argv passed to `ffmpeg`. |
 | `-h`, `--help` | Print help and exit. |
 | `--version` | Print version and exit. |
@@ -114,6 +115,25 @@ exit, the buffer is flushed to **stdout** so the error reaches the user
 When the wrapper falls back to "unknown" mode (no bar), and you haven't
 explicitly chosen `--log-file`, it switches to live-stderr automatically —
 otherwise you'd see no progress at all.
+
+### Overlay
+
+`--overlay` shows `ffmpeg`'s own progress stats line on a second row,
+right above the bar:
+
+```text
+frame= 864 fps= 54 q=24.0 size= 256KiB time=00:00:28.73 bitrate= 73.0kbits/s …
+ 95.8%    0:16 -> ETA 0:00 @ 1.76x ██████████████████████████████████████████▏
+```
+
+With overlay on, the wrapper drops the `-nostats` flag so `ffmpeg` keeps
+emitting its in-place stats line; the wrapper reads it off stderr (char
+by char, since those lines end in `\r` rather than `\n`), parks the
+latest one in the slot above the bar, and re-renders both rows on each
+tick. Non-stats stderr (info, warnings, errors) still flows through the
+normal `--log-file` / `--show-stderr` / buffer-on-failure paths. The
+overlay line is truncated to the terminal width so it can't wrap and
+break cursor positioning.
 
 ### Locale and character set
 

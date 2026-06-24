@@ -13,6 +13,7 @@ module FfmpegProgress
     property no_progress : Bool = false
     property no_color : Bool = false
     property ascii : Bool? = nil # nil = auto-detect from locale
+    property overlay : Bool = false
     property show_help : Bool = false
     property show_version : Bool = false
     property debug : Bool = false
@@ -80,6 +81,10 @@ module FfmpegProgress
           opts.ascii = false
         end
 
+        op.on("--overlay", "Show ffmpeg's own progress stats line above the bar") do
+          opts.overlay = true
+        end
+
         op.on("--debug", "Emit wrapper diagnostics on stderr") do
           opts.debug = true
         end
@@ -107,7 +112,7 @@ module FfmpegProgress
     private STYLE_OPTIONS_WITH_VALUE = {"--log-file"}
     private STYLE_OPTIONS_BOOLEAN    = {
       "--show-stderr", "--no-progress", "--no-color",
-      "--ascii", "--utf8",
+      "--ascii", "--utf8", "--overlay",
       "--debug", "-h", "--help", "--version",
     }
 
