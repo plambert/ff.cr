@@ -65,9 +65,9 @@ module FfmpegProgress
       argv = build_ffmpeg_argv(show_bar)
 
       if @options.debug
-        STDERR.puts "ffmpeg-progress: mode=#{@analysis.mode} duration=#{@analysis.total_duration} frames=#{@analysis.total_frames}"
-        STDERR.puts "ffmpeg-progress: bar ascii=#{@bar.ascii} no_color=#{@bar.no_color} utf8_locale=#{Ansi.utf8_locale?} overlay=#{@overlay_active}"
-        STDERR.puts "ffmpeg-progress: argv=#{argv.inspect}"
+        STDERR.puts "ffp: mode=#{@analysis.mode} duration=#{@analysis.total_duration} frames=#{@analysis.total_frames}"
+        STDERR.puts "ffp: bar ascii=#{@bar.ascii} no_color=#{@bar.no_color} utf8_locale=#{Ansi.utf8_locale?} overlay=#{@overlay_active}"
+        STDERR.puts "ffp: argv=#{argv.inspect}"
       end
 
       process = Process.new(
@@ -95,7 +95,7 @@ module FfmpegProgress
             process.output.gets_to_end
           end
         rescue ex
-          STDERR.puts "ffmpeg-progress: progress reader error: #{ex.message}" if @options.debug
+          STDERR.puts "ffp: progress reader error: #{ex.message}" if @options.debug
         ensure
           progress_done.send(nil)
         end
@@ -106,7 +106,7 @@ module FfmpegProgress
         begin
           read_stderr(process.error, effective_stderr_mode)
         rescue ex
-          STDERR.puts "ffmpeg-progress: stderr reader error: #{ex.message}" if @options.debug
+          STDERR.puts "ffp: stderr reader error: #{ex.message}" if @options.debug
         ensure
           stderr_done.send(nil)
         end
@@ -203,7 +203,7 @@ module FfmpegProgress
     private def write_signal_note(msg : String)
       # Signal handlers shouldn't grab @tty_mutex (re-entrancy risk). Best
       # effort: just write directly to stderr.
-      STDERR.print "\nffmpeg-progress: #{msg}\n" rescue nil
+      STDERR.print "\nffp: #{msg}\n" rescue nil
       STDERR.flush rescue nil
     end
 
@@ -502,7 +502,7 @@ module FfmpegProgress
 
     private def analysis_notes_to_stderr
       @analysis.notes.each do |note|
-        STDERR.puts "ffmpeg-progress: #{note}"
+        STDERR.puts "ffp: #{note}"
       end
     end
   end

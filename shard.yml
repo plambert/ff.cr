@@ -1,11 +1,11 @@
 name: ffmpeg-progress
-version: 0.1.0
+version: 1.0.0
 
 authors:
   - Paul M. Lambert <plambert@plambert.net>
 
 targets:
-  ffmpeg-progress:
+  ffp:
     main: src/cli.cr
 
 crystal: '>= 1.20.2'

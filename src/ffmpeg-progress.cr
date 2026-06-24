@@ -1,5 +1,7 @@
 module FfmpegProgress
-  VERSION = "0.1.0"
+  {% begin %}
+  VERSION = {% `shards version`.strip.stringify %}
+  {% end %}
 end
 
 require "./ffmpeg-progress/ansi"
@@ -15,17 +17,17 @@ module FfmpegProgress
     return 0 if options.show_help || options.show_version
 
     if ffmpeg_args.empty?
-      STDERR.puts "ffmpeg-progress: no ffmpeg arguments given. Use '--' to separate style options from ffmpeg args, e.g. `ffmpeg-progress -- -i in.mp4 out.mp4`."
+      STDERR.puts "ffp: no ffmpeg arguments given. Use '--' to separate style options from ffmpeg args, e.g. `ffmpeg-progress -- -i in.mp4 out.mp4`."
       return 2
     end
 
     analysis = Analyzer.new(ffmpeg_args).analyze
     Runner.new(analysis, options, ffmpeg_args).run
   rescue ex : File::NotFoundError
-    STDERR.puts "ffmpeg-progress: #{ex.message}"
+    STDERR.puts "ffp: #{ex.message}"
     127
   rescue ex
-    STDERR.puts "ffmpeg-progress: #{ex.class}: #{ex.message}"
+    STDERR.puts "ffp: #{ex.class}: #{ex.message}"
     1
   end
 end

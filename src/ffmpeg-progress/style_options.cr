@@ -54,7 +54,7 @@ module FfmpegProgress
       end
 
       OptionParser.parse(style_args) do |op|
-        op.banner = "Usage: ffmpeg-progress [STYLE OPTIONS] -- <ffmpeg args>"
+        op.banner = "Usage: ffp [STYLE OPTIONS] -- <ffmpeg args>"
 
         op.on("--log-file PATH", "Write ffmpeg stderr to PATH instead of buffering") do |path|
           opts.stderr_mode = StderrMode::LogFile
@@ -96,11 +96,11 @@ module FfmpegProgress
 
         op.on("--version", "Show wrapper version and exit") do
           opts.show_version = true
-          STDOUT.puts "ffmpeg-progress #{VERSION}"
+          STDOUT.puts "ffp #{VERSION}"
         end
 
         op.invalid_option do |flag|
-          STDERR.puts "ffmpeg-progress: unknown style option: #{flag}"
+          STDERR.puts "ffp: unknown style option: #{flag}"
           STDERR.puts op.to_s
           exit 2
         end
