@@ -1,6 +1,6 @@
 module FfmpegProgress
   {% begin %}
-  VERSION = {% `shards version`.strip.stringify %}
+  VERSION = {{ `shards version`.strip.stringify }}
   {% end %}
 end
 
